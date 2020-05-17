@@ -1,6 +1,7 @@
 package com.typesafe.akka.extension.quartz
 package test
 
+import java.time.ZoneId
 import java.util.{Calendar, Date}
 
 import akka.japi.Option.Some
@@ -199,6 +200,29 @@ class QuartzSchedulerFunctionalSpec(_system: ActorSystem) extends TestKit(_syste
     val nextRun = QuartzSchedulerExtension(_system).nextTrigger("cronEveryMidnight")
 
     assert(nextRun.getOrElse(new java.util.Date()) == jobDt)
+  }
+
+  "Scheduler is able to exclude weekdays correctly" in {
+    val receiver = _system.actorOf(Props(new ScheduleTestReceiver))
+    val probe = TestProbe()
+    receiver ! NewProbe(probe.ref)
+    QuartzSchedulerExtension(_system).createSchedule("onlyWeekDays", None, "0 0 0 ? * 1-5 *", None)
+    QuartzSchedulerExtension(_system).schedule("onlyWeekDays", receiver, Tick)
+    val nextRuns = QuartzSchedulerExtension(_system).nextTriggersN("onlyWeekDays", 14)
+
+    assert(!nextRuns.exists( date => date.get.getDay > 4 ))
+  }
+
+  "Scheduler with offset should always fire 5 times a week" in {
+    val receiver = _system.actorOf(Props(new ScheduleTestReceiver))
+    val probe = TestProbe()
+    receiver ! NewProbe(probe.ref)
+    val nextRuns = QuartzSchedulerExtension(_system).nextTriggersBetween("onlyWeekDays",
+      new Date(System.currentTimeMillis()),
+      Date.from(new Date(System.currentTimeMillis()).toInstant.atZone(ZoneId.systemDefault()).toLocalDateTime.plusDays(7).atZone(ZoneId.systemDefault()).toInstant)
+    )
+
+    assert(nextRuns.length == 5)
   }
 
   "The Quartz Scheduling Extension with Dynamic Create" must {

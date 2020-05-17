@@ -12,6 +12,7 @@ import org.quartz.impl.DirectSchedulerFactory
 import org.quartz.simpl.{RAMJobStore, SimpleThreadPool}
 import org.quartz.spi.JobStore
 
+import scala.annotation.tailrec
 import scala.collection.{immutable, mutable}
 import scala.util.control.Exception._
 
@@ -105,11 +106,57 @@ class QuartzSchedulerExtension(system: ExtendedActorSystem) extends Extension {
    * Returns the next Date a schedule will be fired
    */
   def nextTrigger(name: String): Option[Date] = {
-    import scala.collection.JavaConverters._
-    for {
-      jobKey <- runningJobs.get(name)
-      trigger <- scheduler.getTriggersOfJob(jobKey).asScala.headOption
-    } yield trigger.getNextFireTime
+    getTrigger(name) match {
+      case Some(trigger) => Some(trigger.getNextFireTime)
+      case None => log.warning("There is no next fire time available!"); None
+    }
+  }
+
+  /**
+   * One would like to have a controlling method.
+   * Returns next n dates a schedule will be fired
+   */
+
+    //TODO: Design abstraction under recGetFireTime
+
+  def nextTriggersN(name: String, n: Int = 7): Array[Option[Date]] = {
+    @tailrec
+    def recGetFireTime(
+                        tr: Trigger,
+                        curDate: Date,
+                        arrDate: Array[Option[Date]],
+                        i: Int,
+                        n: Int): Array[Option[Date]] = {
+      if (i > n) arrDate
+      else recGetFireTime(tr, tr.getFireTimeAfter(curDate), arrDate :+ Option(curDate), i + 1, n)
+    }
+
+    getTrigger(name) match {
+      case Some(tr) => recGetFireTime(tr, tr.getFireTimeAfter(tr.getStartTime), Array(), 0, n)
+      case None => log.warning("There is no next fire time available!"); Array()
+    }
+  }
+
+  /**
+   * One would like to have another controlling method.
+   * Returns fire dates between two dates
+   */
+
+  def nextTriggersBetween(name: String, startDate: Date, endDate: Date): Array[Option[Date]] = {
+
+    def recGetFireTime(
+                        tr: Trigger,
+                        curDate: Date,
+                        arrDate: Array[Option[Date]],
+                        endDate: Date): Array[Option[Date]] = {
+      if (curDate.after(endDate)) arrDate
+      else recGetFireTime(tr, tr.getFireTimeAfter(curDate), arrDate :+ Option(curDate), endDate)
+    }
+
+    getTrigger(name) match {
+      case Some(tr) => recGetFireTime(tr, tr.getFireTimeAfter(tr.getStartTime), Array(), endDate)
+      case None => log.warning("There is no next fire time available!"); Array()
+    }
   }
 
   /**
@@ -349,6 +396,20 @@ class QuartzSchedulerExtension(system: ExtendedActorSystem) extends Extension {
     scheduler.scheduleJob(job, trigger)
   }
 
+  /**
+   * Helper method for trigger extraction so one might use all the methods available.
+   * It opens a possibility to implement other useful methods to control jobs like org.quartz.TriggerUtils kit
+   * @param name The name of the job running to extract it's trigger.
+   * @return A trigger associated with particular job.
+   */
+
+  private def getTrigger(name: String): Option[Trigger] = {
+    import scala.collection.JavaConverters._
+    for {
+      jobKey <- runningJobs.get(name)
+      trigger <- scheduler.getTriggersOfJob(jobKey).asScala.headOption
+    } yield trigger
+  }
 
   /**
    * Parses calendar configurations, creates Calendar instances and attaches them to the scheduler
